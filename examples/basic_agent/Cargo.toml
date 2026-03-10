@@ -1,0 +1,13 @@
+[package]
+name = "roughneck-basic-agent-example"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1.0"
+tokio = { version = "1.44", features = ["macros", "rt-multi-thread"] }
+roughneck-core = { path = "../../crates/roughneck-core" }
+roughneck-runtime = { path = "../../crates/roughneck-runtime" }
+
+[workspace]

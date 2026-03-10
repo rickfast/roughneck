@@ -1,0 +1,37 @@
+{
+  "name": "roughneck-node",
+  "version": "0.1.0",
+  "description": "Node.js bindings for the Roughneck deep-agent runtime",
+  "license": "MIT",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    },
+    "./roughneck.node": {
+      "types": "./roughneck.node.d.ts",
+      "default": "./roughneck.node"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "roughneck.node.d.ts",
+    "roughneck.node",
+    "tests",
+    "scripts"
+  ],
+  "scripts": {
+    "build": "node ./scripts/build-local.mjs",
+    "smoke:runtime": "node ./tests/runtime-smoke.cjs",
+    "smoke:types": "tsc -p ./tsconfig.json"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2"
+  }
+}

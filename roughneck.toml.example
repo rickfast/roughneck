@@ -1,0 +1,40 @@
+system_prompt = "You are Roughneck, a Rig-backed deep agent."
+max_turns = 24
+
+[model]
+kind = "open_ai"
+model = "gpt-4o-mini"
+api_key_env = "OPENAI_API_KEY"
+
+[subagents]
+status = "experimental"
+max_depth = 2
+
+[[subagents.agents]]
+name = "research-agent"
+description = "Investigate focused research tasks"
+system_prompt = "You are a research subagent."
+
+[mcp]
+status = "experimental"
+enable_meta_tool = true
+
+[[mcp.servers]]
+name = "docs"
+endpoint = "https://example.com/mcp"
+
+[hooks]
+enabled = true
+timeout_secs = 15
+
+[[hooks.pre_tool_use]]
+matcher = "execute"
+command = "python3 ./scripts/pre_execute_hook.py"
+
+[[hooks.post_tool_use]]
+matcher = "*"
+command = "python3 ./scripts/post_tool_hook.py"
+
+[[hooks.stop]]
+matcher = "*"
+command = "python3 ./scripts/stop_hook.py"

@@ -1,0 +1,21 @@
+[package]
+name = "roughneck-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+async-trait.workspace = true
+napi.workspace = true
+napi-derive.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+roughneck-core = { path = "../roughneck-core" }
+roughneck-runtime = { path = "../roughneck-runtime" }
+
+[lints]
+workspace = true

@@ -1,0 +1,31 @@
+# Rust
+target/
+**/target/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.mypy_cache/
+.pytest_cache/
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.python-version
+
+# Node / TypeScript
+node_modules/
+*.tsbuildinfo
+*.tgz
+
+# Binding build artifacts
+crates/roughneck-node/roughneck.node
+crates/roughneck-py/python/roughneck_py/_roughneck_py*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
