@@ -462,27 +462,51 @@ impl InteractiveApp {
     }
 
     fn render_input(&self, frame: &mut Frame, area: Rect) {
-        let title = if self.state.busy {
-            "Composer (assistant busy)"
+        let (title, title_color) = if self.state.busy {
+            let pulse = 0.5 + self.state.animation.pulse_phase * 0.5;
+            let color = interpolate_brightness((255, 0, 0), pulse);
+            ("Composer (assistant busy)", color)
         } else {
-            "Composer"
+            ("Composer", rgb_color(NEON_CYAN))
         };
+
         let content = if self.state.input.is_empty() {
+            let pulse = 0.8 + self.state.animation.pulse_phase * 0.2;
             Text::from(vec![
                 Line::from(Span::styled(
                     "Type a prompt, /help, /clear, or /quit",
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(interpolate_brightness(DARK_GRAY, pulse))
                         .add_modifier(Modifier::ITALIC),
                 )),
                 Line::from(""),
             ])
         } else {
-            Text::from(vec![Line::from(self.state.input.as_str())])
+            Text::from(vec![Line::from(Span::styled(
+                self.state.input.as_str(),
+                Style::default().fg(rgb_color(BRIGHT_WHITE)),
+            ))])
         };
 
+        let border_color = if self.state.busy {
+            rgb_color(DARK_GRAY)
+        } else {
+            rgb_color(NEON_CYAN)
+        };
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(border_color))
+            .title(Span::styled(
+                format!(" {} ", title),
+                Style::default()
+                    .fg(title_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+
         let paragraph = Paragraph::new(content)
-            .block(panel(title))
+            .block(block)
             .wrap(Wrap { trim: false });
         frame.render_widget(paragraph, area);
     }
