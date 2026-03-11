@@ -1,3 +1,7 @@
+//! Command-line entrypoints for Roughneck.
+
+mod tui;
+
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use roughneck_core::{
@@ -5,15 +9,29 @@ use roughneck_core::{
     SessionInvokeRequest,
 };
 use roughneck_runtime::{AgentSession, DeepAgent};
-use std::io::{self, Write};
-use std::path::PathBuf;
-
-mod tui;
+use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, ValueEnum)]
 enum Provider {
     Openai,
     Anthropic,
+}
+
+impl Provider {
+    fn default_model(&self) -> &'static str {
+        match self {
+            Self::Openai => "gpt-4o-mini",
+            Self::Anthropic => "claude-3-5-sonnet-latest",
+        }
+    }
+
+    fn as_label(&self) -> &'static str {
+        match self {
+            Self::Openai => "OpenAI",
+            Self::Anthropic => "Anthropic",
+        }
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -36,8 +54,12 @@ struct Cli {
     max_turns: usize,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+/// Runs the Roughneck CLI.
+///
+/// # Errors
+///
+/// Returns an error if configuration, session startup, TUI setup, or model invocation fails.
+pub async fn run() -> Result<()> {
     let args = Cli::parse();
     let mut config = if let Some(path) = args.config.as_ref() {
         load_config(path)?
@@ -55,10 +77,9 @@ async fn main() -> Result<()> {
         config.filesystem.snapshot_on_response = Some(false);
     }
 
-    let model = args.model.unwrap_or_else(|| match args.provider {
-        Provider::Openai => "gpt-4o-mini".to_string(),
-        Provider::Anthropic => "claude-3-5-sonnet-latest".to_string(),
-    });
+    let model = args
+        .model
+        .unwrap_or_else(|| args.provider.default_model().to_string());
 
     config.model = match args.provider {
         Provider::Openai => ModelProviderConfig::OpenAi {
@@ -73,21 +94,31 @@ async fn main() -> Result<()> {
 
     if let Some(prompt) = args.prompt {
         let agent = DeepAgent::new(config).context("failed to initialize deep agent")?;
-        let session = agent
-            .start_session(SessionInit {
-                session_id: Some("cli".to_string()),
-                ..SessionInit::default()
-            })
-            .await
-            .context("failed to start session")?;
-        run_single(&session, prompt).await
-    } else {
-        let provider_label = format!("{:?}", args.provider).to_lowercase();
-        let app = tui::InteractiveApp::new(config, provider_label, model)
-            .await
-            .context("failed to create TUI app")?;
-        app.run().await
+        let session = start_cli_session(&agent).await?;
+        return run_single(&session, prompt).await;
     }
+
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        let agent = DeepAgent::new(config).context("failed to initialize deep agent")?;
+        let session = start_cli_session(&agent).await?;
+        return run_plain_interactive(&session).await;
+    }
+
+    let provider_label = args.provider.as_label().to_string();
+    let app = tui::InteractiveApp::new(config, provider_label, model)
+        .await
+        .context("failed to initialize interactive mode")?;
+    app.run().await
+}
+
+async fn start_cli_session(agent: &DeepAgent) -> Result<AgentSession> {
+    agent
+        .start_session(SessionInit {
+            session_id: Some("cli".to_string()),
+            ..SessionInit::default()
+        })
+        .await
+        .context("failed to start session")
 }
 
 async fn run_single(session: &AgentSession, prompt: String) -> Result<()> {
@@ -104,7 +135,7 @@ async fn run_single(session: &AgentSession, prompt: String) -> Result<()> {
     Ok(())
 }
 
-async fn run_interactive(session: &AgentSession) -> Result<()> {
+async fn run_plain_interactive(session: &AgentSession) -> Result<()> {
     loop {
         print!("> ");
         io::stdout().flush().context("failed to flush stdout")?;
@@ -137,7 +168,7 @@ async fn run_interactive(session: &AgentSession) -> Result<()> {
     Ok(())
 }
 
-fn load_config(path: &PathBuf) -> Result<DeepAgentConfig> {
+fn load_config(path: &Path) -> Result<DeepAgentConfig> {
     let raw = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read config {}", path.display()))?;
     toml::from_str(&raw).with_context(|| format!("failed to parse config {}", path.display()))
