@@ -531,21 +531,54 @@ impl InteractiveApp {
 
     fn render_help(&self, frame: &mut Frame, area: Rect) {
         let popup = centered_rect(74, 60, area);
+
+        // Pulsing cyan border (70%-100% intensity)
+        let border_intensity = 0.7 + self.state.animation.glow_intensity * 0.3;
+        let border_color = interpolate_brightness(NEON_CYAN, border_intensity);
+
         let help = Paragraph::new(Text::from(vec![
             Line::from(Span::styled(
                 "Interactive commands",
-                Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(rgb_color(ELECTRIC_MAGENTA)),
             )),
             Line::from(""),
-            Line::from("/help   toggle this help dialog"),
-            Line::from("/clear  clear the transcript and trace panes"),
-            Line::from("/quit   leave interactive mode"),
+            Line::from(vec![
+                Span::styled("/help", Style::default().fg(rgb_color(NEON_CYAN))),
+                Span::styled("   toggle this help dialog", Style::default().fg(rgb_color(BRIGHT_WHITE))),
+            ]),
+            Line::from(vec![
+                Span::styled("/clear", Style::default().fg(rgb_color(NEON_CYAN))),
+                Span::styled("  clear the transcript and trace panes", Style::default().fg(rgb_color(BRIGHT_WHITE))),
+            ]),
+            Line::from(vec![
+                Span::styled("/quit", Style::default().fg(rgb_color(NEON_CYAN))),
+                Span::styled("   leave interactive mode", Style::default().fg(rgb_color(BRIGHT_WHITE))),
+            ]),
             Line::from(""),
-            Line::from("The Trace pane shows runtime hook notifications and tool call activity as it happens."),
-            Line::from("Hook output recorded after a turn finishes is folded back into the trace automatically."),
+            Line::from(Span::styled(
+                "The Trace pane shows runtime hook notifications and tool call activity as it happens.",
+                Style::default().fg(rgb_color(BRIGHT_WHITE)),
+            )),
+            Line::from(Span::styled(
+                "Hook output recorded after a turn finishes is folded back into the trace automatically.",
+                Style::default().fg(rgb_color(BRIGHT_WHITE)),
+            )),
         ]))
         .wrap(Wrap { trim: true })
-        .block(panel("Help"));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(border_color))
+                .title(Span::styled(
+                    " Help ",
+                    Style::default()
+                        .fg(rgb_color(ELECTRIC_MAGENTA))
+                        .add_modifier(Modifier::BOLD),
+                ))
+        );
 
         frame.render_widget(Clear, popup);
         frame.render_widget(help, popup);
