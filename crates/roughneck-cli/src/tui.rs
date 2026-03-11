@@ -512,15 +512,18 @@ impl InteractiveApp {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        let pulse = 0.7 + self.state.animation.pulse_phase * 0.3;
+        let hotkey_color = interpolate_brightness(NEON_CYAN, pulse);
+
         let footer = Paragraph::new(Line::from(vec![
-            Span::styled("Enter", Style::default().fg(Color::Cyan)),
-            Span::raw(" send  |  "),
-            Span::styled("?", Style::default().fg(Color::Cyan)),
-            Span::raw(" help  |  "),
-            Span::styled("Ctrl+L", Style::default().fg(Color::Cyan)),
-            Span::raw(" clear  |  "),
-            Span::styled("Ctrl+C", Style::default().fg(Color::Cyan)),
-            Span::raw(" quit"),
+            Span::styled("Enter", Style::default().fg(hotkey_color)),
+            Span::styled(" send  |  ", Style::default().fg(rgb_color(MEDIUM_GRAY))),
+            Span::styled("?", Style::default().fg(hotkey_color)),
+            Span::styled(" help  |  ", Style::default().fg(rgb_color(MEDIUM_GRAY))),
+            Span::styled("Ctrl+L", Style::default().fg(hotkey_color)),
+            Span::styled(" clear  |  ", Style::default().fg(rgb_color(MEDIUM_GRAY))),
+            Span::styled("Ctrl+C", Style::default().fg(hotkey_color)),
+            Span::styled(" quit", Style::default().fg(rgb_color(MEDIUM_GRAY))),
         ]))
         .alignment(Alignment::Center);
         frame.render_widget(footer, area);
