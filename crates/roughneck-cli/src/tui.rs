@@ -414,7 +414,7 @@ impl InteractiveApp {
             vec![ListItem::new(Line::from(Span::styled(
                 "No todo list recorded for this session.",
                 Style::default()
-                    .fg(Color::Gray)
+                    .fg(rgb_color(MEDIUM_GRAY))
                     .add_modifier(Modifier::ITALIC),
             )))]
         } else {
@@ -422,30 +422,42 @@ impl InteractiveApp {
                 .todos
                 .iter()
                 .map(|todo| {
-                    let marker = if todo.status == roughneck_core::TodoStatus::Done {
-                        "[x]"
-                    } else {
-                        "[ ]"
-                    };
+                    let (marker, marker_color, text_color) =
+                        if todo.status == roughneck_core::TodoStatus::Done {
+                            ("[x]", NEON_GREEN, MEDIUM_GRAY)
+                        } else {
+                            // Subtle pulse for incomplete todos
+                            let pulse = 0.7 + self.state.animation.pulse_phase * 0.3;
+                            ("[ ]", (255, (255.0 * pulse) as u8, 0), BRIGHT_WHITE)
+                        };
+
                     ListItem::new(Line::from(vec![
                         Span::styled(
                             marker,
-                            Style::default().fg(
-                                if todo.status == roughneck_core::TodoStatus::Done {
-                                    Color::Green
-                                } else {
-                                    Color::Yellow
-                                },
-                            ),
+                            Style::default().fg(rgb_color(marker_color)),
                         ),
                         Span::raw(" "),
-                        Span::raw(todo.task.clone()),
+                        Span::styled(
+                            todo.task.clone(),
+                            Style::default().fg(rgb_color(text_color)),
+                        ),
                     ]))
                 })
                 .collect()
         };
 
-        let list = List::new(items).block(panel("Todos"));
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(rgb_color(BRIGHT_WHITE)))
+            .title(Span::styled(
+                " Todos ",
+                Style::default()
+                    .fg(rgb_color(BRIGHT_WHITE))
+                    .add_modifier(Modifier::BOLD),
+            ));
+
+        let list = List::new(items).block(block);
         frame.render_widget(list, area);
     }
 
