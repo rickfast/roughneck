@@ -5,7 +5,6 @@ use roughneck_core::{
     SessionInvokeRequest,
 };
 use roughneck_runtime::{AgentSession, DeepAgent};
-use std::io::{self, Write};
 use std::path::PathBuf;
 
 mod tui;
@@ -101,39 +100,6 @@ async fn run_single(session: &AgentSession, prompt: String) -> Result<()> {
     if let Some(last) = response.latest_assistant_message {
         println!("{}", last.content);
     }
-    Ok(())
-}
-
-async fn run_interactive(session: &AgentSession) -> Result<()> {
-    loop {
-        print!("> ");
-        io::stdout().flush().context("failed to flush stdout")?;
-
-        let mut input = String::new();
-        io::stdin()
-            .read_line(&mut input)
-            .context("failed to read line")?;
-
-        let trimmed = input.trim();
-        if trimmed.eq_ignore_ascii_case("exit") || trimmed.eq_ignore_ascii_case("quit") {
-            break;
-        }
-        if trimmed.is_empty() {
-            continue;
-        }
-
-        let response = session
-            .invoke(SessionInvokeRequest {
-                messages: vec![ChatMessage::user(trimmed)],
-            })
-            .await
-            .context("invoke failed")?;
-
-        if let Some(last) = response.latest_assistant_message {
-            println!("{}", last.content);
-        }
-    }
-
     Ok(())
 }
 

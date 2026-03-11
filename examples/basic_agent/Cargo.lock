@@ -1249,8 +1249,11 @@ name = "roughneck-basic-agent-example"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "rig-core",
  "roughneck-core",
  "roughneck-runtime",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

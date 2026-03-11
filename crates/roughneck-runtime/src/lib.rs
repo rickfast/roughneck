@@ -8,7 +8,7 @@ pub use extensions::{
 };
 pub use hooks::{
     HookCapture, HookContext, HookDecision, HookEvent, HookExecutor, HookManager, HookPayload,
-    ToolRuntimeContext,
+    HookedToolDyn, ToolRuntimeContext,
 };
 
 use rig::client::CompletionClient;
@@ -47,6 +47,7 @@ struct DeepAgentInner {
     subagent_runtime: Arc<dyn SubagentRuntime>,
     mcp_registry: Arc<McpRegistry>,
     mcp_client: Arc<dyn McpClient>,
+    programmatic_tool_factories: Vec<Arc<dyn ProgrammaticToolFactory>>,
 }
 
 #[derive(Debug, Clone)]
@@ -56,6 +57,86 @@ pub struct AgentSession {
     fs: Arc<dyn FileSystemBackend>,
     todos: Arc<tokio::sync::RwLock<Vec<TodoItem>>>,
     depth: usize,
+}
+
+/// Builds session-scoped tools that are registered programmatically at runtime.
+pub trait ProgrammaticToolFactory: Send + Sync + std::fmt::Debug {
+    fn build_tools(
+        &self,
+        hooks: Arc<HookManager>,
+        runtime: Arc<ToolRuntimeContext>,
+    ) -> Result<Vec<Box<dyn ToolDyn>>>;
+}
+
+struct StaticToolFactory<T>
+where
+    T: Tool<Error = RoughneckError, Output = Value>,
+{
+    tool: T,
+}
+
+impl<T> StaticToolFactory<T>
+where
+    T: Tool<Error = RoughneckError, Output = Value>,
+{
+    fn new(tool: T) -> Self {
+        Self { tool }
+    }
+}
+
+impl<T> std::fmt::Debug for StaticToolFactory<T>
+where
+    T: Tool<Error = RoughneckError, Output = Value>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StaticToolFactory").finish_non_exhaustive()
+    }
+}
+
+impl<T> ProgrammaticToolFactory for StaticToolFactory<T>
+where
+    T: Tool<Error = RoughneckError, Output = Value> + Clone + Send + Sync + 'static,
+    T::Args: Serialize + Send + Sync,
+{
+    fn build_tools(
+        &self,
+        hooks: Arc<HookManager>,
+        runtime: Arc<ToolRuntimeContext>,
+    ) -> Result<Vec<Box<dyn ToolDyn>>> {
+        Ok(vec![hook(self.tool.clone(), hooks, runtime)])
+    }
+}
+
+struct DynamicToolFactory {
+    tool: Arc<dyn ToolDyn>,
+}
+
+impl DynamicToolFactory {
+    fn new(tool: Arc<dyn ToolDyn>) -> Self {
+        Self { tool }
+    }
+}
+
+impl std::fmt::Debug for DynamicToolFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DynamicToolFactory")
+            .field("name", &self.tool.name())
+            .finish()
+    }
+}
+
+impl ProgrammaticToolFactory for DynamicToolFactory {
+    fn build_tools(
+        &self,
+        hooks: Arc<HookManager>,
+        runtime: Arc<ToolRuntimeContext>,
+    ) -> Result<Vec<Box<dyn ToolDyn>>> {
+        Ok(vec![Box::new(HookedToolDyn::new(
+            self.tool.clone(),
+            hooks,
+            runtime,
+        ))])
+    }
 }
 
 impl DeepAgent {
@@ -91,6 +172,7 @@ impl DeepAgent {
                 subagent_runtime,
                 mcp_registry,
                 mcp_client,
+                programmatic_tool_factories: Vec::new(),
             }),
         })
     }
@@ -152,6 +234,49 @@ impl DeepAgent {
         Arc::get_mut(&mut self.inner)
             .expect("DeepAgent::with_hook_executor requires unique ownership")
             .hooks = Arc::new(self.inner.hooks.with_executor(executor));
+        self
+    }
+
+    /// Registers a Rust tool that will be exposed to the model for all future session invokes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the agent has been cloned and no longer has unique ownership of its inner state.
+    pub fn with_tool<T>(mut self, tool: T) -> Self
+    where
+        T: Tool<Error = RoughneckError, Output = Value> + Clone + Send + Sync + 'static,
+        T::Args: Serialize + Send + Sync,
+    {
+        Arc::get_mut(&mut self.inner)
+            .expect("DeepAgent::with_tool requires unique ownership")
+            .programmatic_tool_factories
+            .push(Arc::new(StaticToolFactory::new(tool)));
+        self
+    }
+
+    /// Registers a dynamic Rig tool that will be exposed to the model for all future session invokes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the agent has been cloned and no longer has unique ownership of its inner state.
+    pub fn with_dynamic_tool(mut self, tool: Arc<dyn ToolDyn>) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("DeepAgent::with_dynamic_tool requires unique ownership")
+            .programmatic_tool_factories
+            .push(Arc::new(DynamicToolFactory::new(tool)));
+        self
+    }
+
+    /// Registers a programmatic tool factory used to build tools for each invoke.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the agent has been cloned and no longer has unique ownership of its inner state.
+    pub fn with_tool_factory(mut self, factory: Arc<dyn ProgrammaticToolFactory>) -> Self {
+        Arc::get_mut(&mut self.inner)
+            .expect("DeepAgent::with_tool_factory requires unique ownership")
+            .programmatic_tool_factories
+            .push(factory);
         self
     }
 
@@ -257,13 +382,15 @@ impl AgentSession {
             tool_call_counter: Arc::new(AtomicUsize::new(0)),
         });
 
-        let answer = self
-            .prompt_with_rig(
-                &preamble,
-                prompt,
-                self.build_tools(tool_runtime, hook_capture.clone(), &invocation_id),
-            )
-            .await;
+        let tools = match self.build_tools(tool_runtime, hook_capture.clone(), &invocation_id) {
+            Ok(tools) => tools,
+            Err(err) => {
+                persist_hook_summary(&self.inner.memory, &self.session_id, &hook_capture).await?;
+                return Err(err);
+            }
+        };
+
+        let answer = self.prompt_with_rig(&preamble, prompt, tools).await;
         let answer = match answer {
             Ok(answer) => answer,
             Err(err) => {
@@ -281,7 +408,7 @@ impl AgentSession {
         tool_runtime: Arc<ToolRuntimeContext>,
         hook_capture: Arc<HookCapture>,
         invocation_id: &str,
-    ) -> Vec<Box<dyn ToolDyn>> {
+    ) -> Result<Vec<Box<dyn ToolDyn>>> {
         let mut tools: Vec<Box<dyn ToolDyn>> = vec![
             hook(
                 roughneck_fs::LsTool::new(self.fs.clone()),
@@ -360,11 +487,15 @@ impl AgentSession {
                     self.inner.mcp_client.clone(),
                 ),
                 self.inner.hooks.clone(),
-                tool_runtime,
+                tool_runtime.clone(),
             ));
         }
 
-        tools
+        for factory in &self.inner.programmatic_tool_factories {
+            tools.extend(factory.build_tools(self.inner.hooks.clone(), tool_runtime.clone())?);
+        }
+
+        Ok(tools)
     }
 
     fn build_preamble(&self) -> String {
@@ -722,6 +853,8 @@ fn capability_label(status: CapabilityStatus) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rig::completion::ToolDefinition;
+    use rig::tool::{ToolDyn, ToolError};
 
     #[test]
     fn prompt_builder_carries_context() {
@@ -798,5 +931,59 @@ mod tests {
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].content, "first");
         assert_eq!(history[1].content, "second");
+    }
+
+    #[derive(Debug)]
+    struct RegisteredDynamicTool;
+
+    impl ToolDyn for RegisteredDynamicTool {
+        fn name(&self) -> String {
+            "registered_dynamic".to_string()
+        }
+
+        fn definition<'a>(
+            &'a self,
+            _prompt: String,
+        ) -> rig::wasm_compat::WasmBoxedFuture<'a, ToolDefinition> {
+            Box::pin(async move {
+                ToolDefinition {
+                    name: self.name(),
+                    description: "registered dynamic tool".to_string(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {},
+                    }),
+                }
+            })
+        }
+
+        fn call<'a>(
+            &'a self,
+            _args: String,
+        ) -> rig::wasm_compat::WasmBoxedFuture<'a, std::result::Result<String, ToolError>> {
+            Box::pin(async move { Ok("{}".to_string()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn session_builds_registered_programmatic_tools() {
+        let agent = DeepAgent::new(DeepAgentConfig::default())
+            .unwrap()
+            .with_dynamic_tool(Arc::new(RegisteredDynamicTool));
+        let session = agent.start_session(SessionInit::default()).await.unwrap();
+        let hook_capture = Arc::new(HookCapture::default());
+        let tool_runtime = Arc::new(ToolRuntimeContext {
+            session_id: session.session_id().to_string(),
+            invocation_id: "invoke".to_string(),
+            memory: session.inner.memory.clone(),
+            hook_capture,
+            tool_call_counter: Arc::new(AtomicUsize::new(0)),
+        });
+
+        let tools = session
+            .build_tools(tool_runtime, Arc::new(HookCapture::default()), "invoke")
+            .unwrap();
+
+        assert!(tools.iter().any(|tool| tool.name() == "registered_dynamic"));
     }
 }

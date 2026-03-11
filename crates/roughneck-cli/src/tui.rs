@@ -432,10 +432,7 @@ impl InteractiveApp {
                         };
 
                     ListItem::new(Line::from(vec![
-                        Span::styled(
-                            marker,
-                            Style::default().fg(rgb_color(marker_color)),
-                        ),
+                        Span::styled(marker, Style::default().fg(rgb_color(marker_color))),
                         Span::raw(" "),
                         Span::styled(
                             todo.task.clone(),
@@ -714,7 +711,8 @@ impl AppState {
 
     fn spinner(&self) -> (String, Color) {
         if self.busy {
-            let pattern = &SPINNER_PATTERNS[self.animation.spinner_pattern % SPINNER_PATTERNS.len()];
+            let pattern =
+                &SPINNER_PATTERNS[self.animation.spinner_pattern % SPINNER_PATTERNS.len()];
             let frame = pattern[self.tick % pattern.len()];
             (format!("[{}]", frame), rgb_color(NEON_CYAN))
         } else {
@@ -945,11 +943,11 @@ struct ActivityEntry {
 
 impl ActivityEntry {
     fn as_list_item(&self) -> ListItem<'static> {
-        let (title_color, use_pulse) = match self.level {
-            ActivityLevel::Info => (NEON_CYAN, false),
-            ActivityLevel::Success => (NEON_GREEN, false),
-            ActivityLevel::Warn => (HOT_PINK, false),
-            ActivityLevel::Error => (HOT_PINK, true),
+        let title_color = match self.level {
+            ActivityLevel::Info => NEON_CYAN,
+            ActivityLevel::Success => NEON_GREEN,
+            ActivityLevel::Warn => HOT_PINK,
+            ActivityLevel::Error => HOT_PINK,
         };
 
         let title_style = Style::default()
@@ -958,7 +956,10 @@ impl ActivityEntry {
 
         ListItem::new(Text::from(vec![
             Line::from(vec![
-                Span::styled(self.elapsed.clone(), Style::default().fg(rgb_color(DARK_GRAY))),
+                Span::styled(
+                    self.elapsed.clone(),
+                    Style::default().fg(rgb_color(DARK_GRAY)),
+                ),
                 Span::raw(" "),
                 Span::styled(self.title.clone(), title_style),
             ]),

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use globset::{Glob, GlobMatcher};
 use rig::completion::ToolDefinition;
-use rig::tool::Tool;
+use rig::tool::{Tool, ToolDyn, ToolError};
 use roughneck_core::{
     HookOutputSummary, HookRule, HooksConfig, MemoryBackend, MemoryEvent, MemoryScope, Result,
     RoughneckError, now_millis,
@@ -556,6 +556,166 @@ where
     }
 }
 
+#[derive(Clone)]
+pub struct HookedToolDyn {
+    inner: Arc<dyn ToolDyn>,
+    hooks: Arc<HookManager>,
+    runtime: Arc<ToolRuntimeContext>,
+}
+
+impl HookedToolDyn {
+    #[must_use]
+    pub fn new(
+        inner: Arc<dyn ToolDyn>,
+        hooks: Arc<HookManager>,
+        runtime: Arc<ToolRuntimeContext>,
+    ) -> Self {
+        Self {
+            inner,
+            hooks,
+            runtime,
+        }
+    }
+}
+
+impl std::fmt::Debug for HookedToolDyn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HookedToolDyn")
+            .field("name", &self.inner.name())
+            .finish()
+    }
+}
+
+impl ToolDyn for HookedToolDyn {
+    fn name(&self) -> String {
+        self.inner.name()
+    }
+
+    fn definition<'a>(
+        &'a self,
+        prompt: String,
+    ) -> rig::wasm_compat::WasmBoxedFuture<'a, ToolDefinition> {
+        self.inner.definition(prompt)
+    }
+
+    fn call<'a>(
+        &'a self,
+        args: String,
+    ) -> rig::wasm_compat::WasmBoxedFuture<'a, std::result::Result<String, ToolError>> {
+        Box::pin(async move {
+            let args_value = serde_json::from_str::<Value>(&args)
+                .unwrap_or_else(|_| Value::String(args.clone()));
+            let tool_call_id = self.runtime.next_tool_call_id();
+            let hook_ctx = HookContext::new(
+                self.runtime.session_id.clone(),
+                self.runtime.invocation_id.clone(),
+                Some(tool_call_id.clone()),
+            );
+            let tool_name = self.inner.name();
+
+            let pre = self
+                .hooks
+                .pre_tool_use(&hook_ctx, &tool_name, &args_value)
+                .await
+                .map_err(tool_error_from_runtime)?;
+            self.runtime.hook_capture.record(&pre).await;
+            if pre.blocked {
+                return Err(tool_error_from_message(pre.reason.unwrap_or_else(|| {
+                    format!("{tool_name} blocked by pre-tool hook")
+                })));
+            }
+
+            match self.inner.call(args).await {
+                Ok(output) => {
+                    let output_value = serde_json::from_str::<Value>(&output)
+                        .unwrap_or_else(|_| Value::String(output.clone()));
+                    self.runtime
+                        .append_tool_event(
+                            &tool_name,
+                            &tool_call_id,
+                            &args_value,
+                            Some(&output_value),
+                            None,
+                        )
+                        .await
+                        .map_err(tool_error_from_runtime)?;
+
+                    let post = self
+                        .hooks
+                        .post_tool_use(
+                            &hook_ctx,
+                            &tool_name,
+                            &args_value,
+                            Some(&output_value),
+                            None,
+                        )
+                        .await
+                        .map_err(tool_error_from_runtime)?;
+                    self.runtime.hook_capture.record(&post).await;
+                    if post.blocked {
+                        return Err(tool_error_from_message(post.reason.unwrap_or_else(|| {
+                            format!("{tool_name} blocked by post-tool hook")
+                        })));
+                    }
+                    if post.suppress_output {
+                        self.runtime
+                            .hook_capture
+                            .record_suppressed_tool(&tool_name)
+                            .await;
+                        return serde_json::to_string(&json!({
+                            "suppressed": true,
+                            "tool": tool_name,
+                            "message": "tool output suppressed by hook",
+                        }))
+                        .map_err(ToolError::JsonError);
+                    }
+
+                    Ok(output)
+                }
+                Err(err) => {
+                    let error_string = err.to_string();
+                    let _ = self
+                        .runtime
+                        .append_tool_event(
+                            &tool_name,
+                            &tool_call_id,
+                            &args_value,
+                            None,
+                            Some(&error_string),
+                        )
+                        .await;
+                    let post = self
+                        .hooks
+                        .post_tool_use(
+                            &hook_ctx,
+                            &tool_name,
+                            &args_value,
+                            None,
+                            Some(&error_string),
+                        )
+                        .await
+                        .map_err(tool_error_from_runtime)?;
+                    self.runtime.hook_capture.record(&post).await;
+                    if post.blocked {
+                        return Err(tool_error_from_message(post.reason.unwrap_or_else(|| {
+                            format!("{tool_name} blocked by post-tool hook")
+                        })));
+                    }
+                    Err(err)
+                }
+            }
+        })
+    }
+}
+
+fn tool_error_from_runtime(error: RoughneckError) -> ToolError {
+    ToolError::ToolCallError(Box::new(error))
+}
+
+fn tool_error_from_message(message: String) -> ToolError {
+    ToolError::ToolCallError(Box::new(RoughneckError::Runtime(message)))
+}
+
 impl<T> Tool for HookedTool<T>
 where
     T: Tool<Error = RoughneckError, Output = Value> + Send + Sync,
@@ -765,6 +925,49 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct DynamicEchoTool;
+
+    impl ToolDyn for DynamicEchoTool {
+        fn name(&self) -> String {
+            "dynamic_echo".to_string()
+        }
+
+        fn definition<'a>(
+            &'a self,
+            _prompt: String,
+        ) -> rig::wasm_compat::WasmBoxedFuture<'a, ToolDefinition> {
+            Box::pin(async move {
+                ToolDefinition {
+                    name: self.name(),
+                    description: "echo".to_string(),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {
+                            "value": {"type": "string"}
+                        },
+                        "required": ["value"]
+                    }),
+                }
+            })
+        }
+
+        fn call<'a>(
+            &'a self,
+            args: String,
+        ) -> rig::wasm_compat::WasmBoxedFuture<'a, std::result::Result<String, ToolError>> {
+            Box::pin(async move {
+                let args: Value = serde_json::from_str(&args).map_err(ToolError::JsonError)?;
+                let value = args
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                serde_json::to_string(&json!({"echo": value})).map_err(ToolError::JsonError)
+            })
+        }
+    }
+
     #[tokio::test]
     async fn post_tool_hook_can_suppress_output_and_record_metadata() {
         let hooks = HookManager::new(HooksConfig {
@@ -789,12 +992,14 @@ mod tests {
         });
 
         let tool = HookedTool::new(EchoTool, Arc::new(hooks), runtime);
-        let result = tool
-            .call(EchoArgs {
+        let result = Tool::call(
+            &tool,
+            EchoArgs {
                 value: "hello".to_string(),
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
 
         assert_eq!(result["suppressed"], Value::Bool(true));
         let summary = capture.snapshot().await;
@@ -804,5 +1009,55 @@ mod tests {
 
         let events = memory.get_events("session", usize::MAX).await.unwrap();
         assert!(events.iter().any(|event| event.kind == "tool_call"));
+    }
+
+    #[tokio::test]
+    async fn dynamic_tool_wrapper_runs_hooks_and_records_tool_calls() {
+        let executor = Arc::new(StubExecutor {
+            decisions: HashMap::from([(
+                HookEvent::PostToolUse,
+                HookDecision {
+                    messages: vec!["dynamic masked".to_string()],
+                    suppress_output: true,
+                    ..HookDecision::default()
+                },
+            )]),
+            ..StubExecutor::default()
+        });
+        let hooks =
+            HookManager::new_with_executor(HooksConfig::default(), Some(executor.clone())).unwrap();
+        let memory = Arc::new(InMemoryMemoryBackend::default());
+        let capture = Arc::new(HookCapture::default());
+        let runtime = Arc::new(ToolRuntimeContext {
+            session_id: "session".to_string(),
+            invocation_id: "invoke".to_string(),
+            memory: memory.clone(),
+            hook_capture: capture.clone(),
+            tool_call_counter: Arc::new(AtomicUsize::new(0)),
+        });
+
+        let tool = HookedToolDyn::new(Arc::new(DynamicEchoTool), Arc::new(hooks), runtime);
+        let result = ToolDyn::call(&tool, "{\"value\":\"hello\"}".to_string())
+            .await
+            .unwrap();
+        let result: Value = serde_json::from_str(&result).unwrap();
+
+        assert_eq!(result["suppressed"], Value::Bool(true));
+        let summary = capture.snapshot().await;
+        assert_eq!(summary.messages, vec!["dynamic masked".to_string()]);
+        assert_eq!(summary.suppressed_tools, vec!["dynamic_echo".to_string()]);
+
+        let events = memory.get_events("session", usize::MAX).await.unwrap();
+        assert!(events.iter().any(|event| event.kind == "tool_call"));
+
+        let calls = executor.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].hook_event_name, "PreToolUse");
+        assert_eq!(calls[0].tool_name.as_deref(), Some("dynamic_echo"));
+        assert_eq!(calls[1].hook_event_name, "PostToolUse");
+        assert_eq!(
+            calls[1].tool_call_id.as_deref(),
+            calls[0].tool_call_id.as_deref()
+        );
     }
 }

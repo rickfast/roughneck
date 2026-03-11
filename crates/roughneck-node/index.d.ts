@@ -192,8 +192,25 @@ export interface HookDecision {
 
 export type HookCallback = (payload: HookPayload) => HookDecision | null | undefined
 
+export interface ToolSchema {
+  type?: string
+  description?: string
+  properties?: Record<string, JsonValue>
+  required?: string[]
+  additionalProperties?: boolean
+  [key: string]: JsonValue | undefined
+}
+
+export type ToolCallback = (input: JsonValue) => JsonValue | null | undefined
+
 export class DeepAgent {
   registerHook(event: HookEventName, callback: HookCallback): void
+  registerTool(
+    name: string,
+    description: string,
+    parameters: ToolSchema,
+    callback: ToolCallback,
+  ): void
   startSession(init?: SessionInit): Promise<AgentSession>
 }
 

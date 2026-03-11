@@ -1,8 +1,13 @@
 use anyhow::{Context, Result, bail};
+use rig::completion::ToolDefinition;
+use rig::tool::Tool;
 use roughneck_core::{
-    ChatMessage, DeepAgentConfig, ModelProviderConfig, SessionInit, SessionInvokeRequest,
+    ChatMessage, DeepAgentConfig, ModelProviderConfig, RoughneckError, SessionInit,
+    SessionInvokeRequest,
 };
 use roughneck_runtime::DeepAgent;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 const DEFAULT_PROMPT: &str = "Inspect the seeded files, summarize the project state, and propose the next two engineering tasks.";
@@ -14,6 +19,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| DEFAULT_PROMPT.to_string());
 
     let agent = DeepAgent::new(example_config()?)
+        .map(|agent| agent.with_tool(ReleaseLookupTool))
         .context("failed to initialize roughneck example agent")?;
     let session = agent
         .start_session(SessionInit {
@@ -96,4 +102,44 @@ fn seeded_files() -> HashMap<String, String> {
             "- Add stronger tests\n- Wire a real MCP transport\n".to_string(),
         ),
     ])
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ReleaseLookupArgs {
+    name: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReleaseLookupTool;
+
+impl Tool for ReleaseLookupTool {
+    const NAME: &'static str = "lookup_release";
+    type Error = RoughneckError;
+    type Args = ReleaseLookupArgs;
+    type Output = Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Return a canned release version for a package name.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"}
+                },
+                "required": ["name"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
+        let version = match args.name.as_str() {
+            "roughneck" => "0.1.0",
+            _ => "unknown",
+        };
+        Ok(json!({
+            "name": args.name,
+            "version": version,
+        }))
+    }
 }

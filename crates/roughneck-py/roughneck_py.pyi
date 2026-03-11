@@ -195,8 +195,26 @@ class HookDecisionDict(TypedDict, total=False):
 HookCallback = Callable[[HookPayloadDict], Optional[HookDecisionDict]]
 
 
+class ToolSchemaDict(TypedDict, total=False):
+    type: str
+    description: str
+    properties: Dict[str, JsonValue]
+    required: List[str]
+    additionalProperties: bool
+
+
+ToolCallback = Callable[[JsonValue], Optional[JsonValue]]
+
+
 class DeepAgent:
     def register_hook(self, event: HookEventName, callback: HookCallback) -> None: ...
+    def register_tool(
+        self,
+        name: str,
+        description: str,
+        parameters: ToolSchemaDict,
+        callback: ToolCallback,
+    ) -> None: ...
     def start_session(self, init: Optional[SessionInitDict] = ...) -> AgentSession: ...
 
 

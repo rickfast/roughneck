@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 async-trait.workspace = true
 napi.workspace = true
 napi-derive.workspace = true
+rig-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 roughneck-core = { path = "../roughneck-core" }

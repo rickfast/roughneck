@@ -9,6 +9,7 @@ Roughneck is a Rust-first deep-agent harness built on top of [Rig](https://githu
 - Filesystem state is per session. In-memory sessions can be seeded with `initial_files`; local filesystem sessions operate directly on the configured root and do not expose overlay seeding.
 - Skills can be loaded from `*.skill.toml` and Markdown skill files such as `SKILL.md`.
 - Hook extension points are available for `PreToolUse`, `PostToolUse`, `Notification`, `Stop`, and `SubagentStop`, with real session and invocation context.
+- Programmatic tools can be registered from Rust, Python, and Node / TypeScript.
 - Host bindings now exist as:
   - `roughneck-py` using PyO3
   - `roughneck-node` using napi-rs
@@ -34,10 +35,45 @@ Set provider API keys before running:
 ## Rust API
 
 ```rust
-use roughneck_core::{ChatMessage, SessionInit, SessionInvokeRequest};
+use roughneck_core::{ChatMessage, RoughneckError, SessionInit, SessionInvokeRequest};
 use roughneck_runtime::DeepAgent;
+use rig::completion::ToolDefinition;
+use rig::tool::Tool;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
-let agent = DeepAgent::new(Default::default())?;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LookupArgs {
+    name: String,
+}
+
+#[derive(Debug, Clone)]
+struct LookupReleaseTool;
+
+impl Tool for LookupReleaseTool {
+    const NAME: &'static str = "lookup_release";
+    type Error = RoughneckError;
+    type Args = LookupArgs;
+    type Output = Value;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Return a canned release version.".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        Ok(json!({ "name": args.name, "version": "0.1.0" }))
+    }
+}
+
+let agent = DeepAgent::new(Default::default())?.with_tool(LookupReleaseTool);
 let session = agent.start_session(SessionInit::default()).await?;
 let response = session
     .invoke(SessionInvokeRequest {
@@ -69,6 +105,16 @@ def audit(payload):
     return None
 
 agent.register_hook("notification", audit)
+agent.register_tool(
+    "lookup_release",
+    "Return a canned release version for a package name.",
+    {
+        "type": "object",
+        "properties": {"name": {"type": "string"}},
+        "required": ["name"],
+    },
+    lambda payload: {"version": "0.1.0", "name": payload["name"]},
+)
 
 session = agent.start_session({})
 response = session.invoke({"messages": [{"role": "user", "content": "Summarize the workspace"}]})
@@ -98,6 +144,21 @@ agent.registerHook('notification', (payload) => {
   console.log('node hook:', payload.hook_event_name)
   return undefined
 })
+agent.registerTool(
+  'lookup_release',
+  'Return a canned release version for a package name.',
+  {
+    type: 'object',
+    properties: { name: { type: 'string' } },
+    required: ['name'],
+  },
+  (input) => {
+    if (input && typeof input === 'object' && !Array.isArray(input)) {
+      return { version: '0.1.0', name: input['name'] ?? null }
+    }
+    return null
+  },
+)
 
 const session = await agent.startSession({})
 const response = await session.invoke({

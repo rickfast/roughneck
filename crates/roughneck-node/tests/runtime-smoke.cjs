@@ -6,6 +6,19 @@ async function main() {
     console.log('node hook registered')
     return undefined
   })
+  agent.registerTool(
+    'lookup_release',
+    'Return a canned release version for a package name.',
+    {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+    (input) => {
+      console.log('node tool registered', input)
+      return { version: '0.1.0' }
+    },
+  )
 
   const session = await agent.startSession({
     initial_messages: [{ role: 'user', content: 'hello' }],
